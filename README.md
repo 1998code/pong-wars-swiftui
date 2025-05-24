@@ -2,6 +2,8 @@
 
 Pong Wars is a creative take on the classic Pong game, where two balls bounce around the screen, each "painting" the canvas with its own color. The visual result is a mesmerizing battle between two colors that constantly shifts as the balls move across the screen.
 
+<img width="1472" alt="cover" src="https://github.com/user-attachments/assets/1faeb991-d618-4d05-8e61-6c0d79366cc2" />
+
 ## Features
 
 - Runs natively on Apple platforms with SwiftUI
