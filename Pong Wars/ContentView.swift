@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var gameSpeed: Double = 1.0              // Default speed multiplier
     @State private var dayColor = Color(hex: "#114C5A")
     @State private var nightColor = Color(hex: "#D9E8E3")
+    @State private var isDVDMode: Bool = false              // Track DVD mode state
     
     var body: some View {
         ZStack {
@@ -85,6 +86,17 @@ struct ContentView: View {
                                 .padding(.horizontal)
                                 .onChange(of: gameSpeed) {_,  newValue in
                                     updateGameSpeed()
+                                }
+                        }
+                        
+                        // DVD mode toggle
+                        VStack {
+                            Toggle("DVD Screensaver Mode", isOn: $isDVDMode)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(Color(hex: "#172b36"))
+                                .padding(.horizontal)
+                                .onChange(of: isDVDMode) { _, newValue in
+                                    gameModel.setDVDMode(newValue)
                                 }
                         }
                     }
@@ -244,7 +256,7 @@ struct GameCanvas: View {
                 }
             }
             
-            // Draw balls
+            // Draw balls or DVD logos
             for ball in gameModel.balls {
                 let squareSize = size.width / CGFloat(gameModel.numSquaresX)
                 let radius = squareSize / 2
@@ -252,17 +264,39 @@ struct GameCanvas: View {
                 let ballX = CGFloat(ball.x) / CGFloat(gameModel.canvasWidth) * size.width
                 let ballY = CGFloat(ball.y) / CGFloat(gameModel.canvasHeight) * size.height
                 
-                let circlePath = Path(ellipseIn: CGRect(
-                    x: ballX - radius,
-                    y: ballY - radius,
-                    width: radius * 2,
-                    height: radius * 2
-                ))
-                
-                context.fill(circlePath, with: .color(Color(hex: ball.ballColor)))
+                if gameModel.isDVDMode {
+                    // Don't draw any shape in the canvas for DVD mode
+                    // The text will be drawn in the overlay
+                } else {
+                    // Draw regular ball
+                    let circlePath = Path(ellipseIn: CGRect(
+                        x: ballX - radius,
+                        y: ballY - radius,
+                        width: radius * 2,
+                        height: radius * 2
+                    ))
+                    
+                    context.fill(circlePath, with: .color(Color(hex: ball.ballColor)))
+                }
             }
         }
         .background(Color.white.opacity(0.01)) // Tiny bit of background to make canvas tappable
+        .overlay(
+            // Add DVD text using regular SwiftUI views in an overlay with the colored text
+            ZStack {
+                ForEach(Array(gameModel.balls.enumerated()), id: \.offset) { index, ball in
+                    if gameModel.isDVDMode {
+                        Text("DVD")
+                            .font(.system(size: 22, weight: .black))
+                            .foregroundColor(Color(hex: ball.ballColor))
+                            .position(
+                                x: CGFloat(ball.x) / CGFloat(gameModel.canvasWidth) * (UIScreen.main.bounds.width - 40),
+                                y: CGFloat(ball.y) / CGFloat(gameModel.canvasHeight) * (UIScreen.main.bounds.width - 40)
+                            )
+                    }
+                }
+            }
+        )
     }
 }
 
@@ -283,6 +317,7 @@ class PongWarsGameModel: ObservableObject {
     
     var numSquaresX: Int
     var numSquaresY: Int
+    @Published var isDVDMode: Bool = false  // New DVD mode property
     
     @Published var dayScore = 0
     @Published var nightScore = 0
@@ -296,6 +331,8 @@ class PongWarsGameModel: ObservableObject {
         var dy: Double
         var reverseColor: String
         var ballColor: String
+        var lastBounceX: Int = 0  // Track last horizontal bounce for DVD mode
+        var lastBounceY: Int = 0  // Track last vertical bounce for DVD mode
     }
     
     init() {
@@ -354,15 +391,87 @@ class PongWarsGameModel: ObservableObject {
         
         // Update each ball
         for i in 0..<balls.count {
-            checkSquareCollision(for: &balls[i])
-            checkBoundaryCollision(for: &balls[i])
+            if isDVDMode {
+                checkDVDBoundaryCollision(for: &balls[i])
+            } else {
+                checkSquareCollision(for: &balls[i])
+                checkBoundaryCollision(for: &balls[i])
+            }
             
             // Move ball
             balls[i].x += balls[i].dx
             balls[i].y += balls[i].dy
             
-            // Add randomness
-            addRandomness(to: &balls[i])
+            // Add randomness (only in regular mode)
+            if !isDVDMode {
+                addRandomness(to: &balls[i])
+            }
+            
+            // In DVD mode, update squares that balls pass over
+            if isDVDMode {
+                updateSquareUnderBall(&balls[i])
+            }
+        }
+    }
+    
+    // Set DVD mode
+    func setDVDMode(_ isOn: Bool) {
+        isDVDMode = isOn
+        
+        // If turning on DVD mode, reset ball speeds to be more consistent
+        if isOn {
+            for i in 0..<balls.count {
+                let speed = 5.0
+                // Ensure diagonal movement
+                balls[i].dx = balls[i].dx > 0 ? speed : -speed
+                balls[i].dy = balls[i].dy > 0 ? speed : -speed
+            }
+        }
+    }
+    
+    // Update squares under the ball in DVD mode
+    private func updateSquareUnderBall(_ ball: inout Ball) {
+        let i = Int(ball.x) / squareSize
+        let j = Int(ball.y) / squareSize
+        
+        if i >= 0 && i < numSquaresX && j >= 0 && j < numSquaresY {
+            squares[i][j] = ball.reverseColor
+        }
+    }
+    
+    // DVD style boundary collision (with color change)
+    private func checkDVDBoundaryCollision(for ball: inout Ball) {
+        let radius = Double(squareSize) / 2
+        var didBounce = false
+        
+        // Check horizontal boundaries
+        if ball.x + ball.dx > Double(canvasWidth) - radius || ball.x + ball.dx < radius {
+            ball.dx = -ball.dx
+            didBounce = true
+            ball.lastBounceX += 1
+        }
+        
+        // Check vertical boundaries
+        if ball.y + ball.dy > Double(canvasHeight) - radius || ball.y + ball.dy < radius {
+            ball.dy = -ball.dy
+            didBounce = true
+            ball.lastBounceY += 1
+        }
+        
+        // Change ball color on bounce for DVD effect
+        if didBounce {
+            // Generate a new vibrant color based on bounce count
+            let hue = Double((ball.lastBounceX + ball.lastBounceY) % 12) / 12.0
+            let newColor = UIColor(hue: hue, saturation: 1.0, brightness: 1.0, alpha: 1.0)
+            
+            // Convert UIColor to hex string
+            let colorString = rgbToHex(red: newColor.redValue, green: newColor.greenValue, blue: newColor.blueValue)
+            
+            // Update the ball color
+            ball.ballColor = colorString
+            
+            // In DVD mode, we use the ball color for both the ball and its traces
+            ball.reverseColor = colorString
         }
     }
     
@@ -433,6 +542,11 @@ class PongWarsGameModel: ObservableObject {
         }
     }
     
+    // Helper for DVD mode to convert RGB to hex string
+    private func rgbToHex(red: CGFloat, green: CGFloat, blue: CGFloat) -> String {
+        return String(format: "#%02lX%02lX%02lX", lroundf(Float(red) * 255), lroundf(Float(green) * 255), lroundf(Float(blue) * 255))
+    }
+    
     func updateDayColor(_ newColor: String) {
         // Update all squares with the old day color
         for i in 0..<numSquaresX {
@@ -493,6 +607,27 @@ class PongWarsGameModel: ObservableObject {
         }
         
         nightBallColor = newColor
+    }
+}
+
+// Extension to extract RGB components from UIColor
+extension UIColor {
+    var redValue: CGFloat {
+        var r: CGFloat = 0
+        getRed(&r, green: nil, blue: nil, alpha: nil)
+        return r
+    }
+    
+    var greenValue: CGFloat {
+        var g: CGFloat = 0
+        getRed(nil, green: &g, blue: nil, alpha: nil)
+        return g
+    }
+    
+    var blueValue: CGFloat {
+        var b: CGFloat = 0
+        getRed(nil, green: nil, blue: &b, alpha: nil)
+        return b
     }
 }
 
